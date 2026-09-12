@@ -1,5 +1,5 @@
 (function () {
-  const BUILD = 'b14-present';
+  const BUILD = 'b15-failclosed';
   // A stale content script from a previous build would otherwise keep serving
   // its old closure forever; force a swap when the build changes.
   if (window.__blurExtLoaded) {
@@ -36,6 +36,7 @@
     recordTimerId: null,
     blurStyle: 'gaussian',
     presenting: false,
+    trackingId: null,
   };
 
   function isExtUi(el) {
@@ -200,6 +201,10 @@
   function onClick(e) {
     if (!state.active) return;
     if (isExtUi(e.target)) return; // let toolbar buttons work normally
+    // While presenting you are driving a real demo — clicking tabs, filters,
+    // links. Swallowing those to toggle a blur would make the page feel
+    // broken in front of the client. Set up redactions first; present after.
+    if (state.presenting) return;
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
@@ -217,8 +222,11 @@
     state.toolbar.classList.toggle('blur-ext-recording-hidden', state.presenting);
     state.toolbar.classList.remove('blur-ext-reveal');
     if (state.presenting) {
+      startLiveTracking();
       state.hoverBox.style.display = 'none';
       showToast('Presenting — blurs locked, Esc to exit');
+    } else {
+      stopLiveTracking();
     }
   }
 
@@ -231,7 +239,9 @@
       if (state.presenting) togglePresenting();
       else if (state.recording) toggleRecording();
       else deactivate();
-    } else if (e.key === 'Enter') {
+    } else if (e.key === 'Enter' && !state.presenting) {
+      // Enter stays out of the way while presenting — you may be typing into
+      // the page itself, and firing a screenshot mid-demo is not the intent.
       e.preventDefault();
       captureNow();
     }
@@ -240,23 +250,55 @@
   function repositionAll() {
     state.rafPending = false;
     if (!state.active) return;
+
+    // While presenting or recording the audience is watching live, so a
+    // redaction must never uncover itself. Pages re-render constantly
+    // (dashboards especially) and a covered element can vanish or collapse
+    // for a frame — dropping the overlay there would put the real data on
+    // screen. In that case the overlay is frozen where it last sat instead.
+    const live = state.presenting || state.recording;
+
     for (const [el, overlay] of state.overlays.entries()) {
       if (!el.isConnected) {
+        if (live) continue; // fail closed: keep covering
         overlay.remove();
         state.overlays.delete(el);
         continue;
       }
       const rect = el.getBoundingClientRect();
       if (rect.width < 1 || rect.height < 1) {
+        if (live) continue; // keep the last good position
         overlay.style.display = 'none';
       } else {
         overlay.style.display = 'block';
         positionBoxToRect(overlay, rect);
       }
     }
+
     if (state.hoveredEl && state.hoveredEl.isConnected) {
       positionBoxToRect(state.hoverBox, state.hoveredEl.getBoundingClientRect());
     }
+  }
+
+  // Scroll and resize events don't fire when a page rearranges itself — a
+  // live dashboard pushing in new rows moves content under a fixed overlay
+  // with no event at all. While presenting or recording, track every frame.
+  function startLiveTracking() {
+    if (state.trackingId) return;
+    const tick = () => {
+      if (!state.presenting && !state.recording) {
+        state.trackingId = null;
+        return;
+      }
+      repositionAll();
+      state.trackingId = requestAnimationFrame(tick);
+    };
+    state.trackingId = requestAnimationFrame(tick);
+  }
+
+  function stopLiveTracking() {
+    if (state.trackingId) cancelAnimationFrame(state.trackingId);
+    state.trackingId = null;
   }
 
   function scheduleReposition() {
@@ -294,6 +336,7 @@
           state.recording = true;
           state.recordStartedAt = Date.now();
           setOverlayStrength(true);
+          startLiveTracking();
           state.toolbar.classList.add('blur-ext-recording-hidden');
           state.hoverBox.style.display = 'none';
           state.recordBtn.classList.add('blur-ext-recording-active');
@@ -312,6 +355,7 @@
       state.recordTimerId = null;
       state.recording = false;
       setOverlayStrength(false);
+      stopLiveTracking();
       if (state.toolbar) state.toolbar.classList.remove('blur-ext-recording-hidden', 'blur-ext-reveal');
       state.recordBtn.classList.remove('blur-ext-recording-active');
       state.recordBtn.disabled = true;
@@ -335,6 +379,7 @@
       }
       state.recording = false;
       setOverlayStrength(false);
+      stopLiveTracking();
       if (state.toolbar) state.toolbar.classList.remove('blur-ext-recording-hidden', 'blur-ext-reveal');
       clearInterval(state.recordTimerId);
       state.recordTimerId = null;
@@ -425,6 +470,7 @@
       state.recordTimerId = null;
       state.recording = false;
       setOverlayStrength(false);
+      stopLiveTracking();
       if (state.toolbar) state.toolbar.classList.remove('blur-ext-recording-hidden', 'blur-ext-reveal');
     }
 

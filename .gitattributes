@@ -1,0 +1,8 @@
+# Normalise line endings so the repo stays consistent regardless of OS.
+# Without this, Windows checkouts can show every line of a file as changed.
+* text=auto eol=lf
+
+# Binary files must never be line-ending converted
+*.png binary
+*.zip binary
+*.webm binary
