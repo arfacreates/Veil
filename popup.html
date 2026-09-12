@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="header">
+      <div class="title">Blur &amp; Screenshot</div>
+    </div>
+
+    <button id="activate-btn" class="primary-btn">Activate Blur Mode</button>
+
+    <ol class="steps">
+      <li>Click <b>Activate</b> (or press the shortcut below)</li>
+      <li>Click any name, paragraph, chart, or number to blur it</li>
+      <li>Click <b>Capture</b> for a screenshot, or <b>Record</b> for a video</li>
+      <li>Press <b>Esc</b> or <b>Done</b> to exit and unblur</li>
+    </ol>
+
+    <div class="shortcut-row">
+      <span>Shortcut</span>
+      <kbd id="shortcut-text">Ctrl+Shift+K</kbd>
+      <button id="customize-btn" class="link-btn">Change</button>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

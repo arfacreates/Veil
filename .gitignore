@@ -1,0 +1,23 @@
+# Build output / distributable archives
+*.zip
+*.crx
+*.pem
+
+# Secrets — never commit these
+.env
+.env.*
+*.key
+credentials.json
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Dependencies (if the project ever grows any)
+node_modules/
