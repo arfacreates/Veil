@@ -87,6 +87,55 @@
   color: #ffffff;
 }
 
+/* A small always-visible stop control for while the toolbar is hidden.
+   Hunting for a hidden toolbar mid-recording loses takes, and losing a take
+   is far worse than a 130px pill in the corner of the video. */
+#blur-ext-rec-pill {
+  all: initial;
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(18, 18, 22, 0.82);
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 7px 13px 7px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  user-select: none;
+}
+
+#blur-ext-rec-pill:hover {
+  background: rgba(220, 38, 38, 0.92);
+}
+
+#blur-ext-rec-pill .blur-ext-rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  flex: none;
+  animation: blur-ext-dot 1.5s ease-in-out infinite;
+}
+
+#blur-ext-rec-pill .blur-ext-rec-hint {
+  opacity: 0.72;
+  font-weight: 500;
+}
+
+@keyframes blur-ext-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* Hidden while recording so it stays out of the video; the cursor entering
    the top-right corner brings it back. visibility (not display) keeps its
    size stable so it doesn't reflow when it reappears. */

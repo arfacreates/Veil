@@ -1,5 +1,5 @@
 (function () {
-  const BUILD = 'b15-failclosed';
+  const BUILD = 'b16-recpill';
   // A stale content script from a previous build would otherwise keep serving
   // its old closure forever; force a swap when the build changes.
   if (window.__blurExtLoaded) {
@@ -17,7 +17,7 @@
   // in one instance's state while Capture reads another's — which is how a
   // capture ends up reporting zero regions. Sweep by selector, not by hook.
   const orphans = document.querySelectorAll(
-    '#blur-ext-toolbar, #blur-ext-hover-box, #blur-ext-toast, .blur-ext-overlay'
+    '#blur-ext-toolbar, #blur-ext-hover-box, #blur-ext-toast, #blur-ext-rec-pill, .blur-ext-overlay'
   );
   orphans.forEach((n) => n.remove());
   console.log('[BlurExt] build', BUILD, '| removed', orphans.length, 'orphaned node(s)');
@@ -37,10 +37,12 @@
     blurStyle: 'gaussian',
     presenting: false,
     trackingId: null,
+    recPill: null,
+    pendingExit: false,
   };
 
   function isExtUi(el) {
-    return !!(el && el.closest && el.closest('#blur-ext-toolbar, #blur-ext-hover-box, #blur-ext-toast, .blur-ext-overlay'));
+    return !!(el && el.closest && el.closest('#blur-ext-toolbar, #blur-ext-hover-box, #blur-ext-toast, #blur-ext-rec-pill, .blur-ext-overlay'));
   }
 
   function isIgnorable(el) {
@@ -198,6 +200,31 @@
     }
   }
 
+  // The toolbar hides during recording to stay out of the video, which left
+  // no reliable way to stop — hunting the corner reveal mid-take loses the
+  // recording. This stays put and stops on one click.
+  function showRecPill() {
+    if (state.recPill) return;
+    const pill = document.createElement('div');
+    pill.id = 'blur-ext-rec-pill';
+    pill.innerHTML =
+      '<span class="blur-ext-rec-dot"></span>' +
+      '<span class="blur-ext-rec-time">00:00</span>' +
+      '<span class="blur-ext-rec-hint">Stop · Esc</span>';
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (state.recording) toggleRecording();
+    });
+    document.body.appendChild(pill);
+    state.recPill = pill;
+  }
+
+  function hideRecPill() {
+    state.recPill?.remove();
+    state.recPill = null;
+  }
+
   function onClick(e) {
     if (!state.active) return;
     if (isExtUi(e.target)) return; // let toolbar buttons work normally
@@ -321,9 +348,11 @@
   }
 
   function tickRecordTimer() {
-    if (!state.recordBtn) return;
     const elapsed = Date.now() - state.recordStartedAt;
-    state.recordBtn.textContent = `⏹ Stop ${formatElapsed(elapsed)}`;
+    const t = formatElapsed(elapsed);
+    if (state.recordBtn) state.recordBtn.textContent = `⏹ Stop ${t}`;
+    const clock = state.recPill && state.recPill.querySelector('.blur-ext-rec-time');
+    if (clock) clock.textContent = t;
   }
 
   function toggleRecording() {
@@ -337,6 +366,7 @@
           state.recordStartedAt = Date.now();
           setOverlayStrength(true);
           startLiveTracking();
+          showRecPill();
           state.toolbar.classList.add('blur-ext-recording-hidden');
           state.hoverBox.style.display = 'none';
           state.recordBtn.classList.add('blur-ext-recording-active');
@@ -356,6 +386,7 @@
       state.recording = false;
       setOverlayStrength(false);
       stopLiveTracking();
+      hideRecPill();
       if (state.toolbar) state.toolbar.classList.remove('blur-ext-recording-hidden', 'blur-ext-reveal');
       state.recordBtn.classList.remove('blur-ext-recording-active');
       state.recordBtn.disabled = true;
@@ -371,6 +402,11 @@
         state.recordBtn.classList.remove('blur-ext-recording-active');
       }
       showToast(message.ok === false ? 'Recording failed to save' : 'Recording saved ✓');
+      // If Done was pressed mid-recording, the exit was held open for this.
+      if (state.pendingExit) {
+        state.pendingExit = false;
+        setTimeout(finishDeactivate, 1400); // let the result be read first
+      }
     } else if (message?.type === 'recording-error') {
       if (state.recordBtn) {
         state.recordBtn.disabled = false;
@@ -380,10 +416,12 @@
       state.recording = false;
       setOverlayStrength(false);
       stopLiveTracking();
+      hideRecPill();
       if (state.toolbar) state.toolbar.classList.remove('blur-ext-recording-hidden', 'blur-ext-reveal');
       clearInterval(state.recordTimerId);
       state.recordTimerId = null;
       showToast('Recording error');
+      if (state.pendingExit) { state.pendingExit = false; setTimeout(finishDeactivate, 1400); }
       console.error('Blur & Screenshot recording error:', message.error);
     }
   });
@@ -392,6 +430,7 @@
     if (!state.active) return;
     state.toolbar.style.visibility = 'hidden';
     state.hoverBox.style.display = 'none';
+    if (state.recPill) state.recPill.style.visibility = 'hidden';
 
     const hiddenOverlays = Array.from(state.overlays.values());
     // Measure the overlay itself, not the source element: the overlay is where
@@ -408,6 +447,7 @@
 
     const restoreUi = () => {
       state.toolbar.style.visibility = 'visible';
+      if (state.recPill) state.recPill.style.visibility = 'visible';
       for (const overlay of hiddenOverlays) overlay.style.visibility = 'visible';
     };
 
@@ -461,18 +501,27 @@
 
   function deactivate() {
     if (!state.active) return;
+
+    // Exiting mid-recording used to stop the recorder and then immediately
+    // destroy the toolbar and toast — so "Recording saved" had nothing left
+    // to appear in, and a finished save looked exactly like a cancelled one.
+    // Stop first, keep the UI alive until the file is on disk, then exit.
+    if (state.recording) {
+      state.pendingExit = true;
+      toggleRecording();
+      showToast('Finishing recording…');
+      setTimeout(() => { if (state.pendingExit) { state.pendingExit = false; finishDeactivate(); } }, 15000);
+      return;
+    }
+
+    finishDeactivate();
+  }
+
+  function finishDeactivate() {
     state.active = false;
     state.presenting = false;
-
-    if (state.recording) {
-      chrome.runtime.sendMessage({ type: 'stop-recording' }).catch(() => {});
-      clearInterval(state.recordTimerId);
-      state.recordTimerId = null;
-      state.recording = false;
-      setOverlayStrength(false);
-      stopLiveTracking();
-      if (state.toolbar) state.toolbar.classList.remove('blur-ext-recording-hidden', 'blur-ext-reveal');
-    }
+    state.pendingExit = false;
+    hideRecPill();
 
     document.removeEventListener('mousemove', onMouseMove, true);
     document.removeEventListener('click', onClick, true);
