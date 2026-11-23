@@ -1,5 +1,5 @@
 (function () {
-  const BUILD = 'b16-recpill';
+  const BUILD = 'b17-copy';
   // A stale content script from a previous build would otherwise keep serving
   // its old closure forever; force a swap when the build changes.
   if (window.__blurExtLoaded) {
@@ -61,7 +61,8 @@
         <button type="button" data-style="gaussian" class="blur-ext-style-btn blur-ext-style-active">Blur</button>
         <button type="button" data-style="pixelate" class="blur-ext-style-btn">Pixelate</button>
       </span>
-      <button type="button" class="blur-ext-capture" data-action="capture">📸 Capture</button>
+      <button type="button" class="blur-ext-capture" data-action="copy">⧉ Copy</button>
+      <button type="button" data-action="capture">📸 Save</button>
       <button type="button" data-action="present">👁 Present</button>
       <button type="button" data-action="record">⏺ Record</button>
       <button type="button" class="blur-ext-clear" data-action="clear">Clear</button>
@@ -79,7 +80,8 @@
       const btn = e.target.closest('button[data-action]');
       if (!btn) return;
       const action = btn.getAttribute('data-action');
-      if (action === 'capture') captureNow();
+      if (action === 'copy') copyNow();
+      else if (action === 'capture') captureNow();
       else if (action === 'present') togglePresenting();
       else if (action === 'record') toggleRecording();
       else if (action === 'clear') clearAllBlurs();
@@ -425,6 +427,95 @@
       console.error('Blur & Screenshot recording error:', message.error);
     }
   });
+
+  // Decoded here with atob rather than fetch() or an <img>: both of those run
+  // under the page's own security policy, and strict sites (Instagram) block
+  // them. Plain base64 maths is immune to that.
+  function pngDataUrlToBlob(dataUrl) {
+    const comma = dataUrl.indexOf(',');
+    const bin = atob(dataUrl.slice(comma + 1));
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: 'image/png' });
+  }
+
+  function copyNow() {
+    if (!state.active) return;
+    if (!navigator.clipboard || !window.ClipboardItem) {
+      showToast('Clipboard unavailable here — using Capture instead');
+      captureNow();
+      return;
+    }
+
+    state.toolbar.style.visibility = 'hidden';
+    state.hoverBox.style.display = 'none';
+    if (state.recPill) state.recPill.style.visibility = 'hidden';
+
+    const hiddenOverlays = Array.from(state.overlays.values());
+    const regions = hiddenOverlays
+      .map((ov) => {
+        const r = ov.getBoundingClientRect();
+        return { left: r.left, top: r.top, width: r.width, height: r.height };
+      })
+      .filter((r) => r.width > 0 && r.height > 0);
+    for (const overlay of hiddenOverlays) overlay.style.visibility = 'hidden';
+
+    const restoreUi = () => {
+      state.toolbar.style.visibility = 'visible';
+      if (state.recPill) state.recPill.style.visibility = 'visible';
+      for (const overlay of hiddenOverlays) overlay.style.visibility = 'visible';
+    };
+
+    // Keeps the redacted PNG so a failed clipboard write can still be saved.
+    let rendered = null;
+
+    const blobPromise = new Promise((resolve, reject) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          chrome.runtime.sendMessage(
+            { type: 'capture-screenshot', mode: 'clipboard', regions, viewportWidth: window.innerWidth, blurStyle: state.blurStyle },
+            (response) => {
+              restoreUi();
+              if (!response || !response.ok || !response.dataUrl) {
+                reject(new Error((response && response.error) || 'capture failed'));
+                return;
+              }
+              try {
+                rendered = response.dataUrl;
+                resolve(pngDataUrlToBlob(response.dataUrl));
+              } catch (err) {
+                reject(err);
+              }
+            }
+          );
+        });
+      });
+    });
+
+    // write() is called now, not after awaiting, because the permission to
+    // touch the clipboard is tied to this click and expires if we wait.
+    // ClipboardItem accepts the pending promise, so the round-trip happens
+    // inside a write that was already authorised.
+    navigator.clipboard
+      .write([new ClipboardItem({ 'image/png': blobPromise })])
+      .then(() => {
+        showToast(
+          regions.length
+            ? `Copied ✓ — ${regions.length} area${regions.length > 1 ? 's' : ''} redacted. Paste anywhere.`
+            : 'Copied ✓ (nothing was redacted)'
+        );
+      })
+      .catch((err) => {
+        console.warn('[BlurExt] clipboard write failed, saving instead:', err);
+        if (rendered) {
+          chrome.runtime.sendMessage({ type: 'save-screenshot-dataurl', dataUrl: rendered }, () => {
+            showToast('Clipboard blocked — saved to Downloads instead');
+          });
+        } else {
+          showToast('Copy failed');
+        }
+      });
+  }
 
   function captureNow() {
     if (!state.active) return;

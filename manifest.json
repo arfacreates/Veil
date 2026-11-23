@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Veil — Blur Before You Share",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Hide names, numbers, or any part of a page — then screenshot, record, or present with it redacted. Nothing leaves your computer.",
   "icons": {
     "16": "icons/icon16.png",
@@ -19,7 +19,7 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["activeTab", "scripting", "downloads", "tabCapture", "offscreen", "storage"],
+  "permissions": ["activeTab", "scripting", "downloads", "tabCapture", "offscreen", "storage", "clipboardWrite"],
   "commands": {
     "activate-blur-mode": {
       "suggested_key": {

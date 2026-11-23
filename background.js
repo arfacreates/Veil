@@ -2,7 +2,7 @@
 // toast, so a stale service worker is visible instead of being mistaken for a
 // broken feature — content scripts reload from disk on every activation, but
 // this worker only updates on a real extension reload.
-const SW_BUILD = 'sw-b13';
+const SW_BUILD = 'sw-b17';
 console.log('Blur & Screenshot service worker build', SW_BUILD);
 
 // An offscreen document survives in whatever build created it and keeps its
@@ -137,7 +137,7 @@ function pixelateRegion(ctx, x, y, w, h) {
   ctx.putImageData(image, x, y);
 }
 
-async function renderAndSaveScreenshot({ dataUrl, regions, viewportWidth, blurStyle }) {
+async function renderScreenshot({ dataUrl, regions, viewportWidth, blurStyle }) {
   const bitmap = await createImageBitmap(dataUrlToBlob(dataUrl));
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -169,13 +169,16 @@ async function renderAndSaveScreenshot({ dataUrl, regions, viewportWidth, blurSt
   console.log('[BlurExt/sw] redacted', applied, 'of', regions.length, 'as', blurStyle);
 
   const out = await canvas.convertToBlob({ type: 'image/png' });
+  return { pngDataUrl: await blobToDataUrl(out), applied };
+}
+
+function saveScreenshot(pngDataUrl) {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  await chrome.downloads.download({
-    url: await blobToDataUrl(out),
+  return chrome.downloads.download({
+    url: pngDataUrl,
     filename: `blurred-screenshot-${ts}.png`,
     saveAs: false,
   });
-  return applied;
 }
 
 const OFFSCREEN_URL = 'offscreen.html';
@@ -293,19 +296,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'capture-screenshot' && sender.tab) {
-    const { regions = [], viewportWidth = 0, blurStyle = 'gaussian' } = message;
+    const { regions = [], viewportWidth = 0, blurStyle = 'gaussian', mode = 'download' } = message;
     chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: 'png' }, async (dataUrl) => {
       if (chrome.runtime.lastError || !dataUrl) {
         sendResponse({ ok: false, error: chrome.runtime.lastError?.message || 'capture failed' });
         return;
       }
       try {
-        const applied = await renderAndSaveScreenshot({ dataUrl, regions, viewportWidth, blurStyle });
-        sendResponse({ ok: true, applied, build: SW_BUILD });
+        const out = await renderScreenshot({ dataUrl, regions, viewportWidth, blurStyle });
+        if (mode === 'clipboard') {
+          // The page writes it to the clipboard; only a document context can.
+          sendResponse({ ok: true, applied: out.applied, dataUrl: out.pngDataUrl, build: SW_BUILD });
+        } else {
+          await saveScreenshot(out.pngDataUrl);
+          sendResponse({ ok: true, applied: out.applied, build: SW_BUILD });
+        }
       } catch (err) {
         sendResponse({ ok: false, error: err.message, build: SW_BUILD });
       }
     });
+    return true;
+  }
+
+  // Used when a clipboard copy fails and the capture has to land on disk instead.
+  if (message?.type === 'save-screenshot-dataurl') {
+    saveScreenshot(message.dataUrl)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
 
