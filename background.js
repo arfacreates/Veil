@@ -2,7 +2,7 @@
 // toast, so a stale service worker is visible instead of being mistaken for a
 // broken feature — content scripts reload from disk on every activation, but
 // this worker only updates on a real extension reload.
-const SW_BUILD = 'sw-b17';
+const SW_BUILD = 'sw-b18';
 console.log('Blur & Screenshot service worker build', SW_BUILD);
 
 // An offscreen document survives in whatever build created it and keeps its
@@ -20,6 +20,11 @@ console.log('Blur & Screenshot service worker build', SW_BUILD);
   }
 })();
 
+// Chrome withholds tab.url on its own pages, so an undefined url is itself a
+// hint that this is one. The URL check can only ever be advisory; the real
+// decision comes from whether the injection is allowed.
+const RESTRICTED_PAGE = /chrome:\/\/|chrome-extension:\/\/|edge:\/\/|about:|devtools:|chrome\.google\.com\/webstore|chromewebstore\.google\.com/i;
+
 async function injectAndToggle(tabId, url) {
   if (url && !/^https?:|^file:/i.test(url)) {
     console.warn('Blur & Screenshot: this page cannot be captured —', url);
@@ -29,6 +34,14 @@ async function injectAndToggle(tabId, url) {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
   } catch (err) {
+    const msg = String(err && err.message);
+    // Being refused on a browser-internal page is expected, not a fault, and
+    // logging it as an error puts a red badge on the extension for something
+    // that is working exactly as intended.
+    if (RESTRICTED_PAGE.test(msg) || /cannot be scripted|Cannot access/i.test(msg)) {
+      console.warn('Blur & Screenshot: this page cannot be captured —', msg);
+      return;
+    }
     console.error('Blur & Screenshot: failed to inject content script', err);
   }
 }
